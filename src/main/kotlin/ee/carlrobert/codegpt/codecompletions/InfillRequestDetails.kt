@@ -7,6 +7,7 @@ import ee.carlrobert.codegpt.EncodingManager
 import kotlin.math.max
 import kotlin.math.min
 
+@Suppress("UnstableApiUsage")
 class InfillRequestDetails(val prefix: String, val suffix: String) {
     companion object {
         private const val MAX_OFFSET = 10_000

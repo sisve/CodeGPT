@@ -3,6 +3,7 @@ package ee.carlrobert.codegpt.codecompletions
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.intellij.openapi.components.service
+import ee.carlrobert.codegpt.completions.HackSettings
 import ee.carlrobert.codegpt.completions.llama.LlamaModel
 import ee.carlrobert.codegpt.credentials.CredentialsStore.CredentialKey
 import ee.carlrobert.codegpt.credentials.CredentialsStore.getCredential
@@ -42,8 +43,20 @@ object CodeCompletionRequestFactory {
             }
             requestBuilder.addHeader(entry.key, value)
         }
-        val transformedBody = settings.body.entries.associate { (key, value) ->
+        var transformedBody = settings.body.entries.associate { (key, value) ->
             key to transformValue(value, settings.infillTemplate, details)
+        }
+
+        transformedBody = transformedBody.withDefault {
+            // If we're trimming the first line of the suggestion, then allow
+            // multi-line responses since the initial newline character will
+            // be removed. Also allowed newline characters if we allow
+            // multi-line suggestions.
+            "stop" to when (HackSettings.TrimIndentFirstCompletionLine ||
+                            HackSettings.AllowMultilineSuggestions) {
+                true -> listOf() // no stop sequence
+                false -> listOf("\n")
+            }
         }
 
         try {

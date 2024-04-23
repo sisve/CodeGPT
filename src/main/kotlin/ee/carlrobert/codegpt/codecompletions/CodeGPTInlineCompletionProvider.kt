@@ -8,6 +8,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
 import ee.carlrobert.codegpt.CodeGPTKeys
 import ee.carlrobert.codegpt.completions.CompletionRequestService
+import ee.carlrobert.codegpt.completions.HackSettings
 import ee.carlrobert.codegpt.settings.GeneralSettings
 import ee.carlrobert.codegpt.settings.service.ServiceType
 import ee.carlrobert.codegpt.settings.service.custom.CustomServiceSettings
@@ -16,6 +17,8 @@ import ee.carlrobert.codegpt.settings.service.openai.OpenAISettings
 import ee.carlrobert.codegpt.ui.OverlayUtil.showNotification
 import ee.carlrobert.llm.client.openai.completion.ErrorDetails
 import ee.carlrobert.llm.completion.CompletionEventListener
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.channelFlow
@@ -24,7 +27,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.sse.EventSource
 import java.util.concurrent.atomic.AtomicReference
 
-class CodeGPTInlineCompletionProvider : InlineCompletionProvider {
+@Suppress("UnstableApiUsage")
+class CodeGPTInlineCompletionProvider : DebouncedInlineCompletionProvider() {
     companion object {
         private val logger = thisLogger()
     }
@@ -34,7 +38,11 @@ class CodeGPTInlineCompletionProvider : InlineCompletionProvider {
     override val id: InlineCompletionProviderID
         get() = InlineCompletionProviderID("CodeGPTInlineCompletionProvider")
 
-    override suspend fun getSuggestion(request: InlineCompletionRequest): InlineCompletionSuggestion {
+    override suspend fun getDebounceDelay(request: InlineCompletionRequest): Duration {
+        return HackSettings.CompletionDebounceDelayMs.milliseconds
+    }
+
+    override suspend fun getSuggestionDebounced(request: InlineCompletionRequest): InlineCompletionSuggestion {
         if (request.editor.project == null) {
             logger.error("Could not find project")
             return InlineCompletionSuggestion.empty()
@@ -48,7 +56,18 @@ class CodeGPTInlineCompletionProvider : InlineCompletionProvider {
                 CompletionRequestService.getInstance().getCodeCompletionAsync(
                     infillRequest,
                     CodeCompletionEventListener {
-                        val inlineText = it.takeWhile { message -> message != '\n' }.toString()
+                        val inlineText = it
+                            .dropWhile { ch -> ch.isWhitespace() &&
+                                HackSettings.TrimIndentFirstCompletionLine
+                            }
+
+                            // Either take first line, or everything if
+                            // AllowMultilineSuggestions is enabled.
+                            .takeWhile { message -> message != '\n' ||
+                                HackSettings.AllowMultilineSuggestions }
+
+                            .toString()
+                            .trim()
                         request.editor.putUserData(CodeGPTKeys.PREVIOUS_INLAY_TEXT, inlineText)
                         launch {
                             try {
@@ -84,6 +103,10 @@ class CodeGPTInlineCompletionProvider : InlineCompletionProvider {
     ) : CompletionEventListener<String> {
 
         override fun onMessage(message: String?, eventSource: EventSource?) {
+            if (HackSettings.AllowMultilineSuggestions) {
+                return
+            }
+
             if (message != null && message.contains('\n')) {
                 eventSource?.cancel()
             }
